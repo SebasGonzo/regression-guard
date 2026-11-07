@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\DevTools\\regression-guard\\integrations\\claude\\warn-impact.ps1",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
