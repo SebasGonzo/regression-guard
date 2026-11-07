@@ -26,6 +26,14 @@ Review the source and run `scripts/install_codex.ps1 -WhatIf` or `scripts/instal
 
 Git commands are read-only and use NUL-delimited paths. `check` does not install dependencies or modify virtual environments. It disables pytest cache, bytecode writes, and third-party pytest plugin autoload. **Test code can still have side effects.** Inspect unfamiliar tests and use a disposable checkout for untrusted repositories. The timeout applies to direct test processes; subprocesses spawned by tests may survive it. Python import mapping is static and conservative. Dynamic imports, indirect dependencies, generated tests, integration tests without recognizable names, and JS/TS mapping need manual review. `package.json` test scripts are detected but only the exact `node --test` script can run, with `--allow-node-test`; other scripts are never executed. Passing selected tests never proves the absence of all regressions.
 
+## Automatic task-end hooks
+
+The optional global hooks capture a read-only Git baseline at `UserPromptSubmit` and compare relevant code at `Stop`. A changed Python/JS/TS source file or key test/build configuration triggers one `targeted` check. Documentation-only changes, read-only conversations, and preexisting dirty files that remain unchanged do not trigger it. State lives in the system temporary directory, not in the analyzed repository. The check result is returned to the agent for reporting; a failing result must not trigger automatic code repair. The hooks never request FULL or execute arbitrary package scripts.
+
+Set `REGRESSION_GUARD_TIMEOUT` before launching an agent to choose a 1–150 second test budget (default 120; Hook timeout 180 seconds). To disable both agents immediately, create `%USERPROFILE%\.regression-guard.disabled` as an empty file; delete it to reenable. Alternatively set `REGRESSION_GUARD_DISABLE=1` before launching an agent. Codex also offers `/hooks` to disable its Hook. The example Claude edit-warning Hook is not installed globally.
+
+Limits: the Hook needs a `UserPromptSubmit` baseline. It cannot attribute changes from concurrent processes to a specific agent, and it detects committed changes only when the baseline commit remains available. A Hook timeout or interpreter failure can prevent a result from reaching the agent. Tests may create their own subprocesses or side effects; inspect unfamiliar suites before enabling automation in their repositories.
+
 ## Validation
 
 `$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` runs isolated Git fixtures in temporary directories, including passing and failing checks, shared module selection, no tests, untracked/renamed/staged/unstaged files, timeout, and paths with spaces. It does not touch other projects.
