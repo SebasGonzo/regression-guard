@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\DevTools\\regression-guard\\integrations\\claude\\warn-impact.ps1",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $env:USERPROFILE '.claude/skills/regression-guard/integrations/claude/warn-impact.ps1')\"",
             "timeout": 5
           }
         ]

@@ -1,9 +1,9 @@
-# Claude Code adapter
+# Claude Code integration
 
-Personal skills load from `~/.claude/skills/regression-guard/SKILL.md`. The installer creates a junction to this source tree; invoke `/regression-guard` in a new Claude Code session. The engine is not copied.
+From the repository root on Windows, run `scripts/install_claude.ps1 -WhatIf` to preview a user-scoped junction at `~/.claude/skills/regression-guard`. Remove `-WhatIf` to install. Restart Claude Code and invoke `/regression-guard`. The installer preserves any existing destination and does not edit settings.
 
-Optional hook: merge `hooks.example.json` into a chosen Claude Code `settings.json` manually. It warns only when common global test/build files changed after an Edit or Write. It does not execute tests or block editing. Remove that `PostToolUse` entry to deactivate it. Adjust the absolute script path if the source tree is elsewhere. The installer never changes settings.
+To add an optional edit warning, merge [hooks.example.json](hooks.example.json) into a chosen Claude Code settings file. It uses the installed Skill path and warns when common test/build configuration changed after Edit or Write. It does not run tests or block editing. Remove the `PostToolUse` entry to disable it.
 
-The global automatic integration uses `UserPromptSubmit` to capture a Git baseline and `Stop` to run TARGETED once if relevant code changed. It is separate from the optional edit-warning example. The hook feeds the result back to Claude for reporting and does not repair failures. See the root README for timeout and disable controls.
+For an optional automatic TARGETED check, configure `UserPromptSubmit` and `Stop` command Hooks to run `integrations/hooks/auto_check.py --agent claude --phase start` and `--phase stop`, respectively. Use the Python interpreter and Skill path on your machine. Review the command and allow a Stop timeout above the test budget. The installer does not configure these Hooks.
 
-Reference: https://code.claude.com/docs/en/skills and https://code.claude.com/docs/en/hooks
+See the root README for limitations and disable controls. Official references: [Claude skills](https://code.claude.com/docs/en/skills) and [Claude Hooks](https://code.claude.com/docs/en/hooks).

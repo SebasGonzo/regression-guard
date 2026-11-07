@@ -1,7 +1,7 @@
-# Codex adapter
+# OpenAI Codex integration
 
-The user-scoped skill directory is `~/.agents/skills/regression-guard` according to current OpenAI CLI installation documentation. The installer creates a junction to this source tree. Restart Codex and invoke `$regression-guard`. No Claude style hook is installed for Codex.
+From the repository root on Windows, run `scripts/install_codex.ps1 -WhatIf` to preview a user-scoped junction at `~/.agents/skills/regression-guard`. Remove `-WhatIf` to install. Restart Codex and invoke `$regression-guard`. The installer preserves any existing destination and does not edit settings or Hooks.
 
-The separate global Hook uses `UserPromptSubmit` and `Stop`. Codex requires review and trust of its exact Hook definition in `/hooks`; until trusted, Codex skips it. The result is fed back once for reporting. See the root README for timeout and disable controls.
+For an optional automatic TARGETED check, configure `UserPromptSubmit` and `Stop` command Hooks to run `integrations/hooks/auto_check.py --agent codex --phase start` and `--phase stop`, respectively. Use the Python interpreter and Skill path on your machine. Review and trust the exact Hook definition before enabling it. Allow a Stop timeout above the test budget. No Hook is installed by this repository.
 
-Reference: https://developers.openai.com/api/reference/cli
+See the root README for limitations and disable controls. Official references: [Skill installation](https://developers.openai.com/api/reference/cli) and [Hooks](https://developers.openai.com/docs/hooks).

@@ -1,39 +1,92 @@
 # Regression Guard 1.0
 
-Local Git change analysis and bounded pytest checks for Python repositories. Requires Windows 10/11, PowerShell, Git, Python 3.11+, and pytest for `check`. The CLI itself has no runtime dependencies.
+Regression Guard analyzes local Git changes and runs a bounded selection of related tests. It is a reusable Python Skill for Claude Code and OpenAI Codex on Windows. FULL is never selected implicitly.
 
-## Run from source
+## Requirements
+
+- Windows 10/11, PowerShell, Git, and Python 3.11+.
+- pytest in the Python environment used for checks. Analysis requires only the Python standard library.
+- A Git repository to analyze, with its own test dependencies installed separately.
+
+No GitHub account or API key is needed to use the tool.
+
+## Quick start
+
+Clone this repository and run from its root:
 
 ```powershell
-python scripts/run.py analyze --repo 'C:\My Project'
-python scripts/run.py check --repo 'C:\My Project' --mode targeted --timeout 120 --json report.json
-python scripts/run.py check --repo 'C:\My Project' --mode fast
-python scripts/run.py check --repo 'C:\My Project' --mode full
-python scripts/run.py check --repo 'C:\My Node Project' --allow-node-test --timeout 120
-python scripts/run.py report --repo 'C:\My Project' --base HEAD~1
-python scripts/run.py --help
+python scripts/run.py analyze --repo 'C:\path\to\your-repo'
+python scripts/run.py check --repo 'C:\path\to\your-repo' --mode targeted --timeout 120
+python scripts/run.py report --repo 'C:\path\to\your-repo' --base HEAD~1
 ```
 
-`analyze` and `report` are read-only plans; `check` runs pytest. `--base` compares that commit to HEAD in addition to staged, unstaged, and untracked changes. `fast` chooses direct tests; `targeted` also chooses tests of identified import consumers; `full` chooses all discovered pytest files. `full` is never implicit. A test file counts as passed only if pytest returns success; individual test case counts are not currently reported.
+`analyze` and `report` do not run tests. `check` runs selected tests. Add `--json report.json` for a machine-readable report. `--base` compares a commit with HEAD, alongside staged, unstaged, and untracked changes.
 
-Exit codes: 0 PASS, 1 FAIL, 2 INCOMPLETE, 3 UNKNOWN, 4 input/Git error. The JSON report has the same status and lists changed paths, risk, dependents, selected/executed/passed/failed/skipped/pending files, duration, errors, and limitations.
+| Mode | Selection | Purpose |
+| --- | --- | --- |
+| FAST | Directly related tests | Interim feedback. |
+| TARGETED | Direct tests and tests of statically identified Python import consumers | Default final check. |
+| FULL | All discovered pytest files | Explicit broad check only. |
 
-## Installation (manual action, not run by this project)
+```powershell
+python scripts/run.py check --repo 'C:\path\to\your-repo' --mode fast
+python scripts/run.py check --repo 'C:\path\to\your-repo' --mode full --timeout 120
+```
 
-Review the source and run `scripts/install_codex.ps1 -WhatIf` or `scripts/install_claude.ps1 -WhatIf`. Remove `-WhatIf` to install after authorization. Both scripts require Python 3.11+, refuse an existing destination, and create a junction to this source checkout. No package or dependency is installed. Updating the source checkout updates both linked Skills. Use `-Uninstall` for a safe uninstall; it only removes a junction targeting this checkout. See each integration README for invocation and optional Claude hook setup.
+The total timeout defaults to 120 seconds. Exit codes: 0 PASS, 1 FAIL, 2 INCOMPLETE, 3 UNKNOWN, 4 input/Git error. Reports include changed paths, risk, dependents, selected/executed/passed/failed/skipped/pending test files, errors, and limitations. A passed *file* means pytest succeeded for that file; individual test case counts are not reported.
 
-## Safety and limits
+## Install as a Skill
 
-Git commands are read-only and use NUL-delimited paths. `check` does not install dependencies or modify virtual environments. It disables pytest cache, bytecode writes, and third-party pytest plugin autoload. **Test code can still have side effects.** Inspect unfamiliar tests and use a disposable checkout for untrusted repositories. The timeout applies to direct test processes; subprocesses spawned by tests may survive it. Python import mapping is static and conservative. Dynamic imports, indirect dependencies, generated tests, integration tests without recognizable names, and JS/TS mapping need manual review. `package.json` test scripts are detected but only the exact `node --test` script can run, with `--allow-node-test`; other scripts are never executed. Passing selected tests never proves the absence of all regressions.
+The Windows installers create a junction to this checkout. They refuse an existing destination, install no Python packages, and do not edit agent settings or Hooks. Keep the checkout in place. Review and preview the appropriate script first:
 
-## Automatic task-end hooks
+```powershell
+.\scripts\install_claude.ps1 -WhatIf
+.\scripts\install_codex.ps1 -WhatIf
+```
 
-The optional global hooks capture a read-only Git baseline at `UserPromptSubmit` and compare relevant code at `Stop`. A changed Python/JS/TS source file or key test/build configuration triggers one `targeted` check. Documentation-only changes, read-only conversations, and preexisting dirty files that remain unchanged do not trigger it. State lives in the system temporary directory, not in the analyzed repository. The check result is returned to the agent for reporting; a failing result must not trigger automatic code repair. The hooks never request FULL or execute arbitrary package scripts.
+Remove `-WhatIf` to install the chosen agent, then restart it.
 
-Set `REGRESSION_GUARD_TIMEOUT` before launching an agent to choose a 1–150 second test budget (default 120; Hook timeout 180 seconds). To disable both agents immediately, create `%USERPROFILE%\.regression-guard.disabled` as an empty file; delete it to reenable. Alternatively set `REGRESSION_GUARD_DISABLE=1` before launching an agent. Codex also offers `/hooks` to disable its Hook. The example Claude edit-warning Hook is not installed globally.
+- **Claude Code:** `.\scripts\install_claude.ps1` links to `~/.claude/skills/regression-guard`; invoke `/regression-guard`. See [Claude integration](integrations/claude/README.md).
+- **OpenAI Codex:** `.\scripts\install_codex.ps1` links to `~/.agents/skills/regression-guard`; invoke `$regression-guard`. See [Codex integration](integrations/codex/README.md).
 
-Limits: the Hook needs a `UserPromptSubmit` baseline. It cannot attribute changes from concurrent processes to a specific agent, and it detects committed changes only when the baseline commit remains available. A Hook timeout or interpreter failure can prevent a result from reaching the agent. Tests may create their own subprocesses or side effects; inspect unfamiliar suites before enabling automation in their repositories.
+Use the corresponding installer with `-Uninstall` to remove only a junction pointing to this checkout. Manual installation can copy the complete checkout into the appropriate skills directory; keep `SKILL.md`, `scripts/`, `src/`, and `references/` together.
 
-## Validation
+## Optional automatic Hooks
 
-`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` runs isolated Git fixtures in temporary directories, including passing and failing checks, shared module selection, no tests, untracked/renamed/staged/unstaged files, timeout, and paths with spaces. It does not touch other projects.
+`integrations/hooks/auto_check.py` supports Claude Code and Codex lifecycle Hooks. A `UserPromptSubmit` call with `--phase start` records a read-only Git baseline. A `Stop` call with `--phase stop` compares it and runs one TARGETED check if relevant source or test/build configuration changed. Hook setup is manual and optional. Follow your agent's current Hook configuration, pointing both events to this script with `--agent claude` or `--agent codex` and the appropriate phase. The Stop Hook needs a timeout above the test budget; allow at least 180 seconds for the default 120-second budget. Review and trust any Hook command before enabling it.
+
+The separate Claude [PostToolUse example](integrations/claude/hooks.example.json) warns after edits to common test/build files; it does not run tests. Neither installer enables any Hook.
+
+Set `REGRESSION_GUARD_TIMEOUT` before starting the agent to choose a 1–150 second test budget. Set `REGRESSION_GUARD_DISABLE=1`, or create an empty `%USERPROFILE%\.regression-guard.disabled` file, to disable automatic checks. Hook state lives in the system temporary directory. Results are returned to the agent for reporting, not automatic repair.
+
+## Safety and limitations
+
+Git inspection uses read-only commands and NUL-delimited paths. Checks disable pytest cache, bytecode writes, and third-party plugin autoload. **Test code can still write files, access credentials or services, and spawn subprocesses that outlive the timeout.** Inspect unfamiliar tests and use a disposable checkout for untrusted repositories.
+
+Python import mapping is static and conservative. Dynamic imports, indirect dependencies, generated or unconventional tests, and JavaScript/TypeScript dependency mapping need manual review. A `package.json` test script is reported but not run automatically. Only an exact `node --test` script can run with `check --allow-node-test`. PASS means the selected files passed, not that the repository has no defects.
+
+Automatic Hooks require a successful start baseline. They cannot attribute concurrent edits to an agent; committed changes require the baseline commit to remain available. Interpreter or Hook timeouts can prevent results from reaching the agent. Documentation-only edits and unchanged preexisting dirty files do not trigger a check.
+
+## Instalación y uso en español
+
+Requisitos: Windows 10/11, PowerShell, Git y Python 3.11 o superior. Para ejecutar pruebas, instala `pytest` y las dependencias de pruebas del proyecto que vas a revisar.
+
+Clona este repositorio. Desde su raíz, previsualiza el instalador que corresponda:
+
+```powershell
+.\scripts\install_claude.ps1 -WhatIf
+.\scripts\install_codex.ps1 -WhatIf
+```
+
+Quita `-WhatIf` del instalador elegido. Reinicia Claude Code o Codex e invoca `/regression-guard` o `$regression-guard`. También puedes usar el CLI sin instalar la Skill:
+
+```powershell
+python scripts/run.py analyze --repo 'C:\ruta\a\tu-proyecto'
+python scripts/run.py check --repo 'C:\ruta\a\tu-proyecto' --mode targeted --timeout 120
+```
+
+FAST selecciona pruebas directas; TARGETED añade pruebas de consumidores Python detectados; FULL ejecuta todos los archivos pytest descubiertos y debe solicitarse expresamente. Los Hooks son opcionales y requieren configuración manual. Revisa las pruebas antes de ejecutarlas: pueden tener efectos secundarios.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
