@@ -1,9 +1,11 @@
 # Claude Code integration
 
-From the repository root on Windows, run `scripts/install_claude.ps1 -WhatIf` to preview a user-scoped junction at `~/.claude/skills/regression-guard`. Remove `-WhatIf` to install. Restart Claude Code and invoke `/regression-guard`. The installer preserves any existing destination and does not edit settings.
+Preview scripts/install_claude.ps1 -WhatIf to link ~/.claude/skills/regression-guard to this checkout. The installer refuses existing destinations and edits no global settings. Restart Claude Code and invoke /regression-guard after an intended installation.
 
-To add an optional edit warning, merge [hooks.example.json](hooks.example.json) into a chosen Claude Code settings file. It uses the installed Skill path and warns when common test/build configuration changed after Edit or Write. It does not run tests or block editing. Remove the `PostToolUse` entry to disable it.
+The lifecycle backend is integrations/hooks/auto_check.py with --agent claude and --phase start (UserPromptSubmit) / stop (Stop). It consumes session_id/cwd and uses the same CLI, baseline, deduplication, timeout and runner policies as Codex. No separate selector is embedded here.
 
-For an optional automatic TARGETED check, configure `UserPromptSubmit` and `Stop` command Hooks to run `integrations/hooks/auto_check.py --agent claude --phase start` and `--phase stop`, respectively. Use the Python interpreter and Skill path on your machine. Review the command and allow a Stop timeout above the test budget. The installer does not configure these Hooks.
+Command hooks can use command plus args for direct execution. Preserve existing settings; this repository does not activate or rewrite global hooks. The prior PostToolUse hooks.example.json remains an optional configuration warning and does not execute tests.
 
-See the root README for limitations and disable controls. Official references: [Claude skills](https://code.claude.com/docs/en/skills) and [Claude Hooks](https://code.claude.com/docs/en/hooks).
+The existing additionalContext output envelope is retained. Contract tests call the real shared CLI in temporary repositories; they do not prove delivery to an actual Claude session.
+
+[Claude hooks](https://code.claude.com/docs/en/hooks) documents command/args. Observed local configuration and verification limits are in docs/installation-audit.md.

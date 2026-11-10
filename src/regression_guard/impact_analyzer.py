@@ -26,7 +26,7 @@ def _module(path: str) -> str:
     return ".".join(bits)
 
 
-def analyze(repo: Path, changes: list[Change]) -> Impact:
+def analyze(repo: Path, changes: list[Change], *, files: list[str] | None = None, budget=None) -> Impact:
     changed = sorted({c.path for c in changes})
     python_changes = {p for p in changed if p.endswith(".py")}
     modules = {_module(p): p for p in python_changes}
@@ -37,7 +37,10 @@ def analyze(repo: Path, changes: list[Change]) -> Impact:
     if any(Path(p).name in critical for p in changed):
         unknown = True
         limitations.append("Global test/build configuration changed; selective coverage may be insufficient.")
-    for file in repo.rglob("*.py"):
+    sources = (repo / p for p in files if p.endswith(".py")) if files is not None else repo.rglob("*.py")
+    for file in sources:
+        if budget:
+            budget.check()
         if any(part in {".git", ".venv", "venv", "node_modules", "__pycache__"} for part in file.parts):
             continue
         rel = file.relative_to(repo).as_posix()

@@ -15,20 +15,26 @@ class Change:
     old_path: str | None = None
 
 
-def _git(repo: Path, *args: str) -> bytes:
-    p = subprocess.run(["git", "-C", str(repo), *args], stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE, timeout=30, check=False)
+def _git(repo: Path, *args: str, budget=None) -> bytes:
+    if budget:
+        budget.check()
+    try:
+        p = subprocess.run(["git", "-C", str(repo), *args], stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, timeout=min(30, budget.remaining) if budget else 30, check=False)
+    except subprocess.TimeoutExpired as exc:
+        from .process import BudgetExceeded
+        raise BudgetExceeded("Git inspection exceeded the total budget.") from exc
     if p.returncode:
         raise ValueError(p.stderr.decode("utf-8", "replace").strip() or "Git failed")
     return p.stdout
 
 
-def root(repo: Path) -> Path:
-    return Path(os.fsdecode(_git(repo, "rev-parse", "--show-toplevel").strip())).resolve()
+def root(repo: Path, budget=None) -> Path:
+    return Path(os.fsdecode(_git(repo, "rev-parse", "--show-toplevel", budget=budget).strip())).resolve()
 
 
-def _diff(repo: Path, source: str, *args: str) -> list[Change]:
-    fields = _git(repo, "diff", "--name-status", "-z", "--find-renames", *args).split(b"\0")
+def _diff(repo: Path, source: str, *args: str, budget=None) -> list[Change]:
+    fields = _git(repo, "diff", "--name-status", "-z", "--find-renames", *args, budget=budget).split(b"\0")
     result: list[Change] = []
     i = 0
     while i < len(fields) and fields[i]:
@@ -42,14 +48,14 @@ def _diff(repo: Path, source: str, *args: str) -> list[Change]:
     return result
 
 
-def changes(repo: Path, base: str | None = None) -> list[Change]:
-    repo = root(repo)
-    found = _diff(repo, "staged", "--cached") + _diff(repo, "unstaged")
+def changes(repo: Path, base: str | None = None, budget=None) -> list[Change]:
+    repo = root(repo, budget)
+    found = _diff(repo, "staged", "--cached", budget=budget) + _diff(repo, "unstaged", budget=budget)
     if base:
         # A commit-ish is passed as an argv item. Verify it resolves to a commit.
-        commit = _git(repo, "rev-parse", "--verify", f"{base}^{{commit}}").strip().decode("ascii")
-        found += _diff(repo, "base", commit, "HEAD")
-    raw = _git(repo, "ls-files", "--others", "--exclude-standard", "-z")
+        commit = _git(repo, "rev-parse", "--verify", f"{base}^{{commit}}", budget=budget).strip().decode("ascii")
+        found += _diff(repo, "base", commit, "HEAD", budget=budget)
+    raw = _git(repo, "ls-files", "--others", "--exclude-standard", "-z", budget=budget)
     found += [Change(os.fsdecode(x), "A", "untracked") for x in raw.split(b"\0") if x]
     return sorted(set(found), key=lambda c: (c.path, c.source, c.status))
 

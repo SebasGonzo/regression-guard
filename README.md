@@ -1,92 +1,115 @@
-# Regression Guard 1.0
+# Regression Guard 1.1
 
-Regression Guard analyzes local Git changes and runs a bounded selection of related tests. It is a reusable Python Skill for Claude Code and OpenAI Codex on Windows. FULL is never selected implicitly.
-
-## Requirements
-
-- Windows 10/11, PowerShell, Git, and Python 3.11+.
-- pytest in the Python environment used for checks. Analysis requires only the Python standard library.
-- A Git repository to analyze, with its own test dependencies installed separately.
-
-No GitHub account or API key is needed to use the tool.
+Regression Guard reads Git changes, discovers configured test runners and executes a bounded selection of related test files. Every editor uses the same Python CLI and backend. The engine requires Python 3.11+ and Git; install each project's test dependencies separately.
 
 ## Quick start
 
-Clone this repository and run from its root:
-
 ```powershell
-python scripts/run.py analyze --repo 'C:\path\to\your-repo'
-python scripts/run.py check --repo 'C:\path\to\your-repo' --mode targeted --timeout 120
-python scripts/run.py report --repo 'C:\path\to\your-repo' --base HEAD~1
+python scripts/run.py analyze --repo 'C:\path with spaces\project'
+python scripts/run.py check --repo 'C:\path with spaces\project' --mode targeted --timeout 120
+python scripts/run.py report --repo 'C:\path with spaces\project' --json report.json
 ```
 
-`analyze` and `report` do not run tests. `check` runs selected tests. Add `--json report.json` for a machine-readable report. `--base` compares a commit with HEAD, alongside staged, unstaged, and untracked changes.
+`analyze` and `report` inspect static files and Git; they never launch a test runner or evaluate JavaScript configuration. For Vitest/Jest their discovery is provisional until `check` queries the installed runner.
 
-| Mode | Selection | Purpose |
+No account, API key, global npm package or engine runtime dependency is required. pytest must be installed in the Python interpreter running Regression Guard. Node must be on PATH; Vitest/Jest must be installed in the analyzed package's local node_modules. The engine never downloads dependencies.
+
+## Runner support
+
+| Runner | Detection and discovery | Selection / execution |
 | --- | --- | --- |
-| FAST | Directly related tests | Interim feedback. |
-| TARGETED | Direct tests and tests of statically identified Python import consumers | Default final check. |
-| FULL | All discovered pytest files | Explicit broad check only. |
+| pytest | pytest.ini, pyproject.toml, tox.ini, setup.cfg; python_files, testpaths, norecursedirs; default test_*.py / *_test.py | Existing Python AST import/name selection; same interpreter, per-file pytest, plugin autoload/cache/bytecode disabled |
+| unittest | Standard-library TestCase classes in conventional Python test files; explicit python_runner override | Shared Python selection; unittest discover scoped to one selected filename |
+| node:test | Allowlisted package scripts or node:test imports; explicit patterns including braces and recursive globs; native JS conventions otherwise | Local static imports/re-exports/require, transitive in TARGETED; node --test with explicit files and TAP output |
+| Vitest | Allowlisted scripts, vitest.config files or test imports; native list --filesOnly --json during check | Local static dependency selection; native discovery honors project configuration; local Vitest CLI, run mode and one worker |
+| Jest | Allowlisted scripts, Jest config/package field or @jest/globals imports; native --listTests --json during check | Local static dependency selection; local Jest CLI, --runTestsByPath and --runInBand |
+
+Package roots are discovered recursively, excluding dependency/build/environment directories. packageManager and npm/pnpm/yarn lockfiles are reported. Configured scripts and test imports decide the runner; React/Vite alone does not imply a test runner. Test patterns and local binary paths are package-relative. Dependency links resolving outside the analyzed Git root are unsupported.
+
+Python auto mode prefers pytest when pytest configuration or function-style tests exist; an exclusively unittest-style conventional suite uses unittest. Override ambiguities with --python-runner or repository policy. pytest function/class collection customizations beyond the supported file options remain the runner's responsibility.
+
+JavaScript mapping supports literal relative imports, re-exports and require calls. It is deliberately conservative about aliases, nonliteral imports, template expressions, ambiguous lexical syntax, unresolved/deleted modules and TypeScript-only imports. Unsupported resolution stays UNKNOWN. It is not a full JS/TS parser or coverage instrument. Node does not implicitly install TS/JSX loaders. Vitest/Jest can use their installed transforms, but complex alias-based impact mapping may remain UNKNOWN.
+
+## Modes and coverage policy
+
+- FAST selects direct relationships.
+- TARGETED adds statically recognized consumers/transitive JS relationships.
+- FULL is explicit and selects all discovered files of detected runners.
+- Default fallback is UNKNOWN. No full-suite fallback occurs implicitly.
+- --fallback suite explicitly permits expanding an unmapped selection to that runner's discovered suite, only when it fits --max-tests. Mapping/configuration limitations can still keep the result UNKNOWN.
 
 ```powershell
-python scripts/run.py check --repo 'C:\path\to\your-repo' --mode fast
-python scripts/run.py check --repo 'C:\path\to\your-repo' --mode full --timeout 120
+python scripts/run.py check --repo 'C:\project' --fallback suite --max-tests 20 --timeout 30
 ```
 
-The total timeout defaults to 120 seconds. Exit codes: 0 PASS, 1 FAIL, 2 INCOMPLETE, 3 UNKNOWN, 4 input/Git error. Reports include changed paths, risk, dependents, selected/executed/passed/failed/skipped/pending test files, errors, and limitations. A passed *file* means pytest succeeded for that file; individual test case counts are not reported.
+The default global file budget is 50. All runners share one wall-clock deadline for Git inspection, inventory, mapping, native discovery and test execution. Process-tree cleanup after timeout has a separate short grace period. When time or file budget ends, unfinished selections are pending; they do not pass.
 
-## Install as a Skill
+Optional .regression-guard.toml, or [tool.regression_guard] in pyproject.toml:
 
-The Windows installers create a junction to this checkout. They refuse an existing destination, install no Python packages, and do not edit agent settings or Hooks. Keep the checkout in place. Review and preview the appropriate script first:
+```toml
+fallback = "unknown"
+max_tests = 50
+python_runner = "auto" # auto | pytest | unittest
+```
+
+CLI flags override repository policy. Unknown policy keys and invalid values are rejected.
+
+## Script allowlist
+
+Scripts are data, never shell commands. The resolver accepts:
+
+- node --test followed by relative test paths/patterns.
+- vitest / vitest run, and jest.
+- --config / -c with a local relative configuration file; non-watch run/CI flags.
+- Local aliases through npm test, npm run NAME, pnpm [run] NAME, yarn [run] NAME, including validated forwarded arguments.
+
+Shell operators, substitutions, environment assignments, npx/exec/downloads, arbitrary node scripts, loaders/eval/require flags, external paths, watch/update/zero-test-success flags and unrecognized options are rejected. Cycles are rejected. A rejected primary test script is reported as a verification limitation. Auxiliary arbitrary scripts are not automatically run. Recognized independent test:* scripts can contribute additional runners.
+
+Execution uses argument arrays and shell=False. It calls Node and known project-local CLI entrypoints directly, not npm/pnpm/yarn shims or lifecycle scripts. pretest/posttest hooks are therefore not executed. The historical --allow-node-test flag is accepted for compatibility but is no longer required for validated targeted Node checks.
+
+## Result contract
+
+| State | Meaning |
+| --- | --- |
+| PASS | Selected relevant files finished successfully, at least one test case passed, and no known mapping/runner uncertainty or omitted cases remain |
+| FAIL | A selected runner reports a failed test/file or a failing test-process exit |
+| INCOMPLETE | Analysis/execution timed out, the global file budget left pending work, or known cases were skipped/deselected |
+| UNKNOWN | No relevant tests/cases, unsupported or missing runner, unresolved impact/configuration, or unusable output prevents a coverage claim |
+
+FAIL takes precedence over timeout/uncertainty; timeout takes precedence over UNKNOWN. JSON includes discovered/selected/executed/passed/failed/skipped/pending files, per-runner reasons, commands, covered/uncovered changes, case counts, limitations and errors. Aggregate file lists deduplicate paths; per-runner reports preserve separate executions. Counts measure reported cases and files, not code coverage. PASS never proves absence of regressions.
+
+Exit codes: 0 PASS, 1 FAIL, 2 INCOMPLETE, 3 UNKNOWN, 4 input/configuration/Git error.
+
+## Editor integrations
+
+- [Codex](integrations/codex/README.md): optional skill junction and UserPromptSubmit/Stop hooks.
+- [Claude Code](integrations/claude/README.md): optional skill junction and the same lifecycle backend.
+- [Antigravity](integrations/antigravity/README.md): payload adapter and manual example; not automatically installed or claimed verified in the IDE.
+- [Other editors](integrations/generic/README.md): direct CLI or explicit start/stop JSON wrapper.
+
+The Windows skill installers preserve existing destinations and do not change global settings or enable hooks. Preview with scripts/install_codex.ps1 -WhatIf or scripts/install_claude.ps1 -WhatIf.
+
+Lifecycle hooks keep the baseline, once-per-task claim, configurable 1–150 second budget (default 120), recursion guard and disable controls. Set REGRESSION_GUARD_DISABLE=1 or create ~/.regression-guard.disabled to pause. State lives in the system temporary directory. The baseline decides whether to trigger; the backend then reads the repository's current Git diff, including existing dirty files. Concurrent edits cannot reliably be attributed to a person/editor.
+
+## Safety
+
+[Testing policy](references/testing_policy.md) defines execution boundaries. Running tests or runner configuration is executing project code: it can write files, use credentials, call services and spawn processes. Command validation is not an operating-system sandbox. Inspect unfamiliar repositories or use a disposable environment. No automatic repairs occur.
+
+## Development verification
 
 ```powershell
-.\scripts\install_claude.ps1 -WhatIf
-.\scripts\install_codex.ps1 -WhatIf
+$env:PYTHONPATH = 'src'
+python -B -m unittest discover -s tests -v
 ```
 
-Remove `-WhatIf` to install the chosen agent, then restart it.
+The default suite uses temporary Git repositories, actual pytest/unittest/Node and simulated Vitest/Jest contract binaries. Optional real-framework checks are in tests/test_real_javascript.py. Set REGRESSION_GUARD_REAL_JS_ROOT to a dedicated temporary directory named regression-guard-real-runners-* with project-local vitest@3.2.4 and jest@30.2.0 installed using --ignore-scripts. This opt-in harness initializes its own Git fixture and writes test files there; never point it at a consumer repository. The tests do not install packages.
 
-- **Claude Code:** `.\scripts\install_claude.ps1` links to `~/.claude/skills/regression-guard`; invoke `/regression-guard`. See [Claude integration](integrations/claude/README.md).
-- **OpenAI Codex:** `.\scripts\install_codex.ps1` links to `~/.agents/skills/regression-guard`; invoke `$regression-guard`. See [Codex integration](integrations/codex/README.md).
+See [validation evidence](docs/validation.md) and [installation audit](docs/installation-audit.md).
 
-Use the corresponding installer with `-Uninstall` to remove only a junction pointing to this checkout. Manual installation can copy the complete checkout into the appropriate skills directory; keep `SKILL.md`, `scripts/`, `src/`, and `references/` together.
+Runner references: [Node 22 test runner](https://nodejs.org/docs/latest-v22.x/api/test.html), [Vitest CLI](https://vitest.dev/guide/cli), [Jest CLI](https://jestjs.io/docs/cli), [npm lifecycle scripts](https://docs.npmjs.com/cli/v11/using-npm/scripts/).
 
-## Optional automatic Hooks
+## Extending
 
-`integrations/hooks/auto_check.py` supports Claude Code and Codex lifecycle Hooks. A `UserPromptSubmit` call with `--phase start` records a read-only Git baseline. A `Stop` call with `--phase stop` compares it and runs one TARGETED check if relevant source or test/build configuration changed. Hook setup is manual and optional. Follow your agent's current Hook configuration, pointing both events to this script with `--agent claude` or `--agent codex` and the appropriate phase. The Stop Hook needs a timeout above the test budget; allow at least 180 seconds for the default 120-second budget. Review and trust any Hook command before enabling it.
+Implement the Adapter protocol in src/regression_guard/adapters/base.py, add it to ADAPTERS, and return the common Plan/Run types. Keep detection, discovery, selection and execution inside the adapter/backend; lifecycle hooks must never implement runner-specific selection. Add isolated fixtures for discovery, selection, success/failure, no cases, missing runner, timeouts, command policy and mixed projects. Unsupported ecosystems remain UNKNOWN.
 
-The separate Claude [PostToolUse example](integrations/claude/hooks.example.json) warns after edits to common test/build files; it does not run tests. Neither installer enables any Hook.
-
-Set `REGRESSION_GUARD_TIMEOUT` before starting the agent to choose a 1–150 second test budget. Set `REGRESSION_GUARD_DISABLE=1`, or create an empty `%USERPROFILE%\.regression-guard.disabled` file, to disable automatic checks. Hook state lives in the system temporary directory. Results are returned to the agent for reporting, not automatic repair.
-
-## Safety and limitations
-
-Git inspection uses read-only commands and NUL-delimited paths. Checks disable pytest cache, bytecode writes, and third-party plugin autoload. **Test code can still write files, access credentials or services, and spawn subprocesses that outlive the timeout.** Inspect unfamiliar tests and use a disposable checkout for untrusted repositories.
-
-Python import mapping is static and conservative. Dynamic imports, indirect dependencies, generated or unconventional tests, and JavaScript/TypeScript dependency mapping need manual review. A `package.json` test script is reported but not run automatically. Only an exact `node --test` script can run with `check --allow-node-test`. PASS means the selected files passed, not that the repository has no defects.
-
-Automatic Hooks require a successful start baseline. They cannot attribute concurrent edits to an agent; committed changes require the baseline commit to remain available. Interpreter or Hook timeouts can prevent results from reaching the agent. Documentation-only edits and unchanged preexisting dirty files do not trigger a check.
-
-## Instalación y uso en español
-
-Requisitos: Windows 10/11, PowerShell, Git y Python 3.11 o superior. Para ejecutar pruebas, instala `pytest` y las dependencias de pruebas del proyecto que vas a revisar.
-
-Clona este repositorio. Desde su raíz, previsualiza el instalador que corresponda:
-
-```powershell
-.\scripts\install_claude.ps1 -WhatIf
-.\scripts\install_codex.ps1 -WhatIf
-```
-
-Quita `-WhatIf` del instalador elegido. Reinicia Claude Code o Codex e invoca `/regression-guard` o `$regression-guard`. También puedes usar el CLI sin instalar la Skill:
-
-```powershell
-python scripts/run.py analyze --repo 'C:\ruta\a\tu-proyecto'
-python scripts/run.py check --repo 'C:\ruta\a\tu-proyecto' --mode targeted --timeout 120
-```
-
-FAST selecciona pruebas directas; TARGETED añade pruebas de consumidores Python detectados; FULL ejecuta todos los archivos pytest descubiertos y debe solicitarse expresamente. Los Hooks son opcionales y requieren configuración manual. Revisa las pruebas antes de ejecutarlas: pueden tener efectos secundarios.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+MIT license; see LICENSE.

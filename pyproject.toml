@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "regression-guard"
-version = "1.0.0"
-description = "Selective, read-only Git impact analysis and bounded regression checks"
+version = "1.1.0"
+description = "Configurable multi-runner Git impact analysis and bounded regression checks"
 requires-python = ">=3.11"
 dependencies = []
 
@@ -14,3 +14,7 @@ regression-guard = "regression_guard.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
