@@ -1,0 +1,18 @@
+{
+  "regression-guard": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python \"<checkout>/integrations/hooks/auto_check.py\" --agent antigravity --phase start",
+        "timeout": 10
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python \"<checkout>/integrations/hooks/auto_check.py\" --agent antigravity --phase stop",
+        "timeout": 180
+      }
+    ]
+  }
+}

@@ -14,8 +14,8 @@ class Selection:
     strategy: str
 
 
-def select(repo: Path, impact: Impact, mode: str) -> Selection:
-    all_tests = sorted({p.relative_to(repo).as_posix() for p in repo.rglob("test_*.py")
+def select(repo: Path, impact: Impact, mode: str, *, all_tests: list[str] | None = None) -> Selection:
+    all_tests = all_tests if all_tests is not None else sorted({p.relative_to(repo).as_posix() for p in repo.rglob("test_*.py")
                         if not any(x in {".venv", "venv", "node_modules", ".git"} for x in p.parts)} |
                        {p.relative_to(repo).as_posix() for p in repo.rglob("*_test.py")
                         if not any(x in {".venv", "venv", "node_modules", ".git"} for x in p.parts)})

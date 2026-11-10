@@ -11,15 +11,9 @@ import tempfile
 from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parents[2]
-CODE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
-CONFIG_NAMES = {"pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "package.json", "tsconfig.json"}
-
-
-def relevant(path: str) -> bool:
-    p = Path(path)
-    return p.suffix.lower() in CODE_SUFFIXES or p.name.lower() in CONFIG_NAMES or (
-        p.name.lower().startswith("requirements") and p.suffix.lower() == ".txt"
-    )
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(SOURCE / "src"))
+from regression_guard.project import relevant  # noqa: E402
 
 
 def git(repo: Path, *args: str) -> bytes:
@@ -74,18 +68,25 @@ def output(agent: str, message: str | None = None) -> None:
         print("{}")
     elif agent == "claude":
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": message}}))
+    elif agent == "antigravity":
+        print(json.dumps({"decision": "continue", "reason": message}))
+    elif agent == "generic":
+        print(json.dumps({"report": message}))
     else:
         print(json.dumps({"decision": "block", "reason": message}))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--agent", choices=("claude", "codex"), required=True)
+    parser.add_argument("--agent", choices=("claude", "codex", "antigravity", "generic"), required=True)
     parser.add_argument("--phase", choices=("start", "stop"), required=True)
     args = parser.parse_args()
     try:
         event = json.load(sys.stdin)
     except (ValueError, UnicodeError):
+        output(args.agent)
+        return 0
+    if not isinstance(event, dict):
         output(args.agent)
         return 0
     if os.environ.get("REGRESSION_GUARD_DISABLE", "").lower() in {"1", "true", "yes"}:
@@ -97,8 +98,17 @@ def main() -> int:
     if args.phase == "stop" and event.get("stop_hook_active"):
         output(args.agent)
         return 0
-    session = event.get("session_id")
-    cwd = event.get("cwd")
+    if args.agent == "antigravity":
+        # PreInvocation repeats within a task. Never reset its baseline on continuation.
+        if args.phase == "start" and event.get("invocationNum") != 1:
+            output(args.agent)
+            return 0
+        session = event.get("conversationId")
+        workspaces = event.get("workspacePaths", [])
+        cwd = workspaces[0] if isinstance(workspaces, list) and len(workspaces) == 1 else None
+    else:
+        session = event.get("session_id")
+        cwd = event.get("cwd")
     if not isinstance(session, str) or not session or not isinstance(cwd, str):
         output(args.agent)
         return 0
@@ -145,13 +155,15 @@ def main() -> int:
     except ValueError:
         timeout = 120
     command = [sys.executable, str(SOURCE / "scripts" / "run.py"), "check", "--repo", str(repo),
-               "--mode", "targeted", "--timeout", str(timeout)]
+               "--mode", "targeted", "--timeout", str(timeout), "--compact"]
     if before["head"] != after["head"]:
         command += ["--base", before["head"]]
     try:
         proc = subprocess.run(command, cwd=repo, capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=timeout + 20)
-        report = proc.stdout.strip()[-2500:] or proc.stderr.strip()[-1000:]
+        report = proc.stdout.strip() or proc.stderr.strip()[-1000:]
+        if len(report) > 2500:
+            report = report.splitlines()[0] + "\n...\n" + report[-2300:]
         if proc.returncode not in {0, 1, 2, 3}:
             report = f"Regression Guard: UNKNOWN (runner error {proc.returncode}). {report}"
     except (OSError, subprocess.TimeoutExpired) as exc:

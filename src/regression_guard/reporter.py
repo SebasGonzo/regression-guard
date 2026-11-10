@@ -31,13 +31,18 @@ def build(changes: list[Change], impact: Impact, selection: Selection, run: Run 
             "limitations": limits, "errors": run.errors if run else []}
 
 
-def render(report: dict) -> str:
+def render(report: dict, *, compact: bool = False) -> str:
     lines = [f"Regression Guard: {report['status']} (risk: {report['risk']})"]
-    for key in ("changes", "dependents", "selected", "executed", "passed", "failed", "skipped", "pending", "limitations", "errors"):
-        val = report[key]
+    keys = ("changes", "dependents", "discovered", "selected", "executed", "passed", "failed", "skipped", "pending", "limitations", "errors")
+    for key in keys:
+        val = report.get(key, [])
         lines.append(f"{key}: {len(val) if isinstance(val, list) else val}")
-        for item in val:
+        for item in (val[:4] if compact else val):
             lines.append(f"  - {item if isinstance(item, str) else item['source'] + ':' + item['status'] + ':' + item['path']}")
+    if "runners" in report:
+        for runner in report["runners"]:
+            lines.append(f"runner: {runner['id']} discovered={len(runner['discovered'])} selected={len(runner['selected'])} executed={len(runner['executed'])}")
+        lines.append(f"case_counts: {report['case_counts']}")
     lines.append(f"duration_seconds: {report['duration_seconds']}")
     return "\n".join(lines)
 

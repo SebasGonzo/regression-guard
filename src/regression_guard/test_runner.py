@@ -19,6 +19,9 @@ class Run:
     duration: float = 0.0
     errors: list[str] = field(default_factory=list)
     timed_out: bool = False
+    case_counts: dict[str, int] = field(default_factory=lambda: dict(total=0, passed=0, failed=0, skipped=0))
+    commands: list[list[str]] = field(default_factory=list)
+    unknown: list[str] = field(default_factory=list)
 
 
 def run_pytest(repo: Path, tests: list[str], timeout: float) -> Run:
@@ -49,30 +52,5 @@ def run_pytest(repo: Path, tests: list[str], timeout: float) -> Run:
         else:
             result.failed.append(test)
             result.errors.append(f"{test}: {p.stdout[-4000:]}")
-    result.duration = round(time.monotonic() - start, 3)
-    return result
-
-
-def run_node_test(repo: Path, timeout: float) -> Run:
-    """Only the exact built-in Node test command is accepted."""
-    result = Run(pending=["package.json:test"])
-    start = time.monotonic()
-    try:
-        p = subprocess.run(["node", "--test"], cwd=repo,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                           text=True, encoding="utf-8", errors="replace", timeout=timeout)
-    except subprocess.TimeoutExpired:
-        result.timed_out = True
-        result.errors.append("Timeout while running node --test")
-    except OSError as exc:
-        result.errors.append(f"Cannot run node --test: {exc}")
-    else:
-        result.pending.clear()
-        result.executed.append("package.json:test")
-        if p.returncode:
-            result.failed.append("package.json:test")
-            result.errors.append(p.stdout[-4000:])
-        else:
-            result.passed.append("package.json:test")
     result.duration = round(time.monotonic() - start, 3)
     return result
