@@ -13,7 +13,14 @@ from pathlib import Path
 SOURCE = Path(__file__).resolve().parents[2]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(SOURCE / "src"))
-from regression_guard.project import relevant  # noqa: E402
+from regression_guard.project import policy_config, relevant  # noqa: E402
+
+
+def mappings(repo: Path) -> list:
+    try:
+        return policy_config(repo).get("mappings", [])
+    except (OSError, ValueError):
+        return []
 
 
 def git(repo: Path, *args: str) -> bytes:
@@ -33,10 +40,12 @@ def repository(cwd: str) -> Path | None:
 def snapshot(repo: Path) -> dict:
     head = git(repo, "rev-parse", "HEAD").strip().decode("ascii")
     names = set()
-    for args in (("diff", "--name-only", "-z"), ("diff", "--cached", "--name-only", "-z"),
+    for args in (("diff", "--no-renames", "--name-only", "-z"),
+                 ("diff", "--cached", "--no-renames", "--name-only", "-z"),
                  ("ls-files", "--others", "--exclude-standard", "-z")):
         names.update(os.fsdecode(x) for x in git(repo, *args).split(b"\0") if x)
-    names = {name for name in names if relevant(name)}
+    rules = mappings(repo)
+    names = {name for name in names if relevant(name, rules)}
     index = {}
     for item in git(repo, "ls-files", "--stage", "-z").split(b"\0"):
         if not item or b"\t" not in item:
@@ -138,10 +147,12 @@ def main() -> int:
     committed = set()
     if before["head"] != after["head"]:
         try:
-            committed = {os.fsdecode(x) for x in git(repo, "diff", "--name-only", "-z", before["head"], after["head"]).split(b"\0") if x}
+            committed = {os.fsdecode(x) for x in git(repo, "diff", "--no-renames", "--name-only", "-z",
+                                                    before["head"], after["head"]).split(b"\0") if x}
         except (OSError, RuntimeError, subprocess.TimeoutExpired):
             committed = set()
-    if before["files"] == after["files"] and not any(relevant(x) for x in committed):
+    rules = mappings(repo) if committed else ()
+    if before["files"] == after["files"] and not any(relevant(x, rules) for x in committed):
         output(args.agent)
         return 0
     try:

@@ -22,6 +22,8 @@ class Run:
     case_counts: dict[str, int] = field(default_factory=lambda: dict(total=0, passed=0, failed=0, skipped=0))
     commands: list[list[str]] = field(default_factory=list)
     unknown: list[str] = field(default_factory=list)
+    outcomes: dict[str, str] = field(default_factory=dict)
+    budget_exhausted: bool = False
 
 
 def run_pytest(repo: Path, tests: list[str], timeout: float) -> Run:

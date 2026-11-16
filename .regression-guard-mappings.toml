@@ -1,0 +1,25 @@
+# Kept separate so 1.1 can still read this repository's main policy.
+# The hook is launched by path in the lifecycle tests.
+[[mappings]]
+changes = ["integrations/hooks/auto_check.py"]
+tests = ["tests/test_hooks.py", "tests/test_repair.py"]
+
+# Verify the repository's release metadata and the actual mapping targets.
+[[mappings]]
+changes = ["pyproject.toml", ".regression-guard-mappings.toml"]
+tests = ["tests/test_repair.py"]
+
+# Shared planning and policy, Python discovery/environments, and runner outcomes.
+[[mappings]]
+changes = [
+    "src/regression_guard/adapters/base.py",
+    "src/regression_guard/adapters/python.py",
+    "src/regression_guard/execution.py",
+    "src/regression_guard/project.py",
+]
+tests = ["tests/test_adapters.py", "tests/test_repair.py"]
+
+# Native framework checks are reported as skipped if their fixture is unavailable.
+[[mappings]]
+changes = ["src/regression_guard/adapters/javascript.py"]
+tests = ["tests/test_adapters.py", "tests/test_repair.py", "tests/test_real_javascript.py"]

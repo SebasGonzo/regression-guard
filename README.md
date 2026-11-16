@@ -1,4 +1,4 @@
-# Regression Guard 1.1
+# Regression Guard 1.2
 
 Regression Guard reads Git changes, discovers configured test runners and executes a bounded selection of related test files. Every editor uses the same Python CLI and backend. The engine requires Python 3.11+ and Git; install each project's test dependencies separately.
 
@@ -12,19 +12,19 @@ python scripts/run.py report --repo 'C:\path with spaces\project' --json report.
 
 `analyze` and `report` inspect static files and Git; they never launch a test runner or evaluate JavaScript configuration. For Vitest/Jest their discovery is provisional until `check` queries the installed runner.
 
-No account, API key, global npm package or engine runtime dependency is required. pytest must be installed in the Python interpreter running Regression Guard. Node must be on PATH; Vitest/Jest must be installed in the analyzed package's local node_modules. The engine never downloads dependencies.
+No account, API key, global npm package or engine runtime dependency is required. pytest must be installed in the selected Python interpreter. Node must be on PATH. Vitest and Jest are resolved from the package toward the Git root, using existing node_modules directories. The engine never downloads dependencies.
 
 ## Runner support
 
 | Runner | Detection and discovery | Selection / execution |
 | --- | --- | --- |
-| pytest | pytest.ini, pyproject.toml, tox.ini, setup.cfg; python_files, testpaths, norecursedirs; default test_*.py / *_test.py | Existing Python AST import/name selection; same interpreter, per-file pytest, plugin autoload/cache/bytecode disabled |
+| pytest | pytest.ini, pytest.toml, pyproject.toml, tox.ini, setup.cfg; python_files, testpaths, norecursedirs; default test_*.py / *_test.py | Python AST import/name selection within the project, per-file pytest, plugin autoload/cache/bytecode disabled |
 | unittest | Standard-library TestCase classes in conventional Python test files; explicit python_runner override | Shared Python selection; unittest discover scoped to one selected filename |
 | node:test | Allowlisted package scripts or node:test imports; explicit patterns including braces and recursive globs; native JS conventions otherwise | Local static imports/re-exports/require, transitive in TARGETED; node --test with explicit files and TAP output |
 | Vitest | Allowlisted scripts, vitest.config files or test imports; native list --filesOnly --json during check | Local static dependency selection; native discovery honors project configuration; local Vitest CLI, run mode and one worker |
 | Jest | Allowlisted scripts, Jest config/package field or @jest/globals imports; native --listTests --json during check | Local static dependency selection; local Jest CLI, --runTestsByPath and --runInBand |
 
-Package roots are discovered recursively, excluding dependency/build/environment directories. packageManager and npm/pnpm/yarn lockfiles are reported. Configured scripts and test imports decide the runner; React/Vite alone does not imply a test runner. Test patterns and local binary paths are package-relative. Dependency links resolving outside the analyzed Git root are unsupported.
+Package roots are discovered recursively, excluding dependency/build/environment directories. Python uses the nearest project marker such as pyproject.toml, pytest.ini, setup.py or requirements.txt. JavaScript uses the nearest package.json. Test discovery and paths are scoped to that project. When multiple plans select the same file, the most specific project takes precedence, with configured scripts preferred over conventions. Within the same project equivalent selections execute once. Conflicting runner/options are reported as insufficient evidence. Dependency links resolving outside the analyzed Git root are unsupported.
 
 Python auto mode prefers pytest when pytest configuration or function-style tests exist; an exclusively unittest-style conventional suite uses unittest. Override ambiguities with --python-runner or repository policy. pytest function/class collection customizations beyond the supported file options remain the runner's responsibility.
 
@@ -50,9 +50,27 @@ Optional .regression-guard.toml, or [tool.regression_guard] in pyproject.toml:
 fallback = "unknown"
 max_tests = 50
 python_runner = "auto" # auto | pytest | unittest
+
+[[mappings]]
+changes = ["data/CURRENT", "data/baselines/*.json"]
+tests = ["apps/service/tests/test_baseline.py"]
+
+[environments."apps/service"]
+kind = "host"
+venv = "apps/service/.venv"
+
+[environments."services/worker"]
+kind = "docker"
+profile = "worker-ci"
 ```
 
 CLI flags override repository policy. Unknown policy keys and invalid values are rejected.
+
+Mappings match repository-relative paths and discovered tests. Glob patterns use case-sensitive fnmatch syntax, where `*` can span directory separators. Each selected test lists its matched rule and changed path. Hooks use the same mappings to recognize paths without a file extension. Multiple rules can match the same test.
+
+For projects used with both 1.1 and 1.2, put the `[[mappings]]` tables in a root `.regression-guard-mappings.toml`. This file accepts only mappings. Keep the shared settings `fallback`, `max_tests`, and `python_runner` in the main policy. Regression Guard 1.1 reads the main policy and ignores the separate file. Regression Guard 1.2 uses both files and rejects mappings declared in both places.
+
+Environment keys are exact repository-relative project directories. For Python, an explicit repository-relative venv takes precedence, followed by the project's existing .venv or venv and then the Python running Regression Guard. An unavailable configured environment is reported without substituting another interpreter. Profiles of kind wsl or docker can be declared and are reported as environment_unavailable in 1.2.0. This release does not launch those transports.
 
 ## Script allowlist
 
@@ -72,11 +90,11 @@ Execution uses argument arrays and shell=False. It calls Node and known project-
 | State | Meaning |
 | --- | --- |
 | PASS | Selected relevant files finished successfully, at least one test case passed, and no known mapping/runner uncertainty or omitted cases remain |
-| FAIL | A selected runner reports a failed test/file or a failing test-process exit |
+| FAIL | At least one selected runner reports a failed test case |
 | INCOMPLETE | Analysis/execution timed out, the global file budget left pending work, or known cases were skipped/deselected |
-| UNKNOWN | No relevant tests/cases, unsupported or missing runner, unresolved impact/configuration, or unusable output prevents a coverage claim |
+| UNKNOWN | Collection, infrastructure, an unavailable environment, no selection, or insufficient evidence prevents a verified result |
 
-FAIL takes precedence over timeout/uncertainty; timeout takes precedence over UNKNOWN. JSON includes discovered/selected/executed/passed/failed/skipped/pending files, per-runner reasons, commands, covered/uncovered changes, case counts, limitations and errors. Aggregate file lists deduplicate paths; per-runner reports preserve separate executions. Counts measure reported cases and files, not code coverage. PASS never proves absence of regressions.
+FAIL takes precedence over budget exhaustion and uncertainty. JSON retains the existing fields and adds `reasons`, per-runner `outcomes` and `environment`, and skipped duplicates. Reasons include passed, test_failure, collection_error, infrastructure_error, environment_unavailable, no_tests_selected, budget_exhausted, cases_skipped and insufficient_evidence. An attempted file can appear in executed before any cases run, so check case_counts and outcomes. Change risk is assessed from affected configuration and known dependents independently of the test verdict. `risk_assessed` indicates whether relevant changes were available for that assessment.
 
 Exit codes: 0 PASS, 1 FAIL, 2 INCOMPLETE, 3 UNKNOWN, 4 input/configuration/Git error.
 

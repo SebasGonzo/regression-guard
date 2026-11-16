@@ -20,12 +20,14 @@ Git inspection is read-only. The hook's initial snapshot is only an activation b
 
 ## Honest states
 
-- FAIL: selected test/file failure or failing test command.
+- FAIL: a selected runner reports a failed test case.
 - INCOMPLETE: analysis/execution timeout, pending file-budget work or known skipped/deselected cases.
-- UNKNOWN: unsupported/missing runner, no relevant files or cases, unresolved dependency/configuration mapping, or unverifiable output.
+- UNKNOWN: unavailable environment, collection or infrastructure error, no selection, or insufficient evidence. Discovery errors and process exit codes alone cannot establish a failed test case.
 - PASS: all selected relevant files completed, actual cases passed, with no known uncertainty or omissions. This is scoped evidence, never proof of zero regressions.
 
 Failing tests take precedence; timeouts then take precedence over unknown strategy. Discovery/launch errors are reported and never automatically repaired.
+
+The owning package supplies the runner working directory. Explicit path mappings participate in hook activation and CLI selection. Existing local Python environments and Node tooling can be used. WSL and Docker profiles are descriptive in 1.2.0.
 
 ## Supported limits
 

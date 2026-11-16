@@ -7,6 +7,7 @@ from typing import Protocol
 
 from ..git_analyzer import Change
 from ..process import Budget
+from ..project import matches
 from ..test_runner import Run
 
 
@@ -28,6 +29,7 @@ class Context:
     execute: bool = False
     packages: list[dict] = field(default_factory=list)
     limitations: list[str] = field(default_factory=list)
+    settings: dict = field(default_factory=dict)
 
     @property
     def changed(self) -> set[str]:
@@ -46,6 +48,8 @@ class Plan:
     unknown: bool = False
     available: bool = True
     metadata: dict = field(default_factory=dict)
+    environment: dict = field(default_factory=lambda: {"kind": "host"})
+    unavailable_reason: str | None = None
 
     @property
     def id(self) -> str:
@@ -58,6 +62,36 @@ class Adapter(Protocol):
     def detect(self, context: Context) -> list[Plan]: ...
     def prepare(self, context: Context, plan: Plan) -> None: ...
     def run(self, context: Context, plan: Plan) -> Run: ...
+
+
+def configure_environment(context: Context, plan: Plan) -> None:
+    profile = context.settings.get("environments", {}).get(plan.directory)
+    if profile:
+        plan.environment.update(profile)
+    if plan.environment["kind"] != "host":
+        plan.available = False
+        plan.unavailable_reason = "environment_unavailable"
+        plan.limitations.append(
+            f"{plan.environment['kind']} profile requires an authorized external execution environment.")
+
+
+def apply_mappings(context: Context, plan: Plan) -> None:
+    for number, rule in enumerate(context.settings.get("mappings", []), 1):
+        context.budget.check()
+        paths = sorted(mapped_changes(context, rule))
+        if paths:
+            for test in plan.discovered:
+                if matches(test, rule["tests"]):
+                    plan.reasons.setdefault(test, []).extend(
+                        f"mapping {number}: {path}" for path in paths)
+                    plan.covered.update(paths)
+    plan.selected = sorted(plan.reasons)
+
+
+def mapped_changes(context: Context, rule: dict) -> set[str]:
+    return {change.path for change in context.changes
+            if matches(change.path, rule["changes"])
+            or (change.old_path and matches(change.old_path, rule["changes"]))}
 
 
 def apply_fallback(context: Context, plan: Plan, unresolved: set[str]) -> None:

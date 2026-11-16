@@ -7,11 +7,11 @@ import re
 import shutil
 from pathlib import Path
 
-from .base import Context, Plan, apply_fallback
+from .base import Context, Plan, apply_fallback, apply_mappings, configure_environment, mapped_changes
 from ..dependencies import JS_SUFFIXES, closure, graph
 from ..execution import execute_files, json_value
 from ..process import invoke
-from ..project import local_path
+from ..project import local_path, matches, owner
 from ..scripts import Script, resolve
 
 
@@ -35,14 +35,11 @@ def pattern_matches(path: str, pattern: str) -> bool:
     return match(0, 0)
 
 
-def under(file: str, directory: str) -> bool:
-    return directory == "." or file.startswith(directory.rstrip("/") + "/")
-
-
 def specifications(context: Context) -> list[dict]:
     if hasattr(context, "_specifications"):
         return context._specifications
     found = []
+    directories = {p["directory"] for p in context.packages}
     for package in context.packages:
         directory, data = package["directory"], package["data"]
         scripts = data.get("scripts", {})
@@ -61,11 +58,7 @@ def specifications(context: Context) -> list[dict]:
             except ValueError as exc:
                 if name == "test":
                     primary_error = f"Primary test script was not executed: {exc}"
-        local = [f for f in context.files if under(f, directory)
-                 and not any(other["directory"] != directory
-                             and under(other["directory"] + "/", directory)
-                             and under(f, other["directory"])
-                             for other in context.packages)]
+        local = [f for f in context.files if owner(f, directories) == directory]
         config_names = {Path(f).name for f in local}
         text_markers = set()
         for file in local:
@@ -123,22 +116,32 @@ class JavaScriptAdapter:
             plan = Plan(self.name, item["directory"])
             plan.metadata = {"options": spec.options, "patterns": spec.patterns,
                              "package_manager": item["manager"], "script": item["script"]}
+            configure_environment(context, plan)
+            if not plan.available:
+                result.append(plan)
+                continue
             node = shutil.which("node")
             plan.available = bool(node)
             plan.metadata["executable"] = node
+            plan.environment["interpreter"] = node
             try:
                 for value in spec.options[1::2]:
                     local_path(context.repo / plan.directory, value)
             except ValueError as exc:
                 plan.available = False
                 plan.unknown = True
+                plan.unavailable_reason = "infrastructure_error"
                 plan.limitations.append(str(exc))
             if self.binary:
-                executable = context.repo / plan.directory / "node_modules" / self.binary
-                plan.available &= executable.is_file() and executable.resolve().is_relative_to(context.repo)
-                plan.metadata["binary"] = str(executable)
+                directory = Path(plan.directory)
+                candidates = (context.repo / p / "node_modules" / self.binary
+                              for p in (directory, *directory.parents))
+                executable = next((p for p in candidates if p.is_file()), None)
+                plan.available &= executable is not None and executable.resolve().is_relative_to(context.repo)
+                plan.metadata["binary"] = str(executable) if executable else None
+                plan.environment["runner_path"] = plan.metadata["binary"]
             if not plan.available:
-                plan.unknown = True
+                plan.unavailable_reason = plan.unavailable_reason or "environment_unavailable"
                 plan.limitations.append(f"{self.name} runner unavailable; install project dependencies explicitly.")
             result.append(plan)
         return result
@@ -149,8 +152,9 @@ class JavaScriptAdapter:
 
     def discover(self, context: Context, plan: Plan) -> list[str]:
         result = []
+        directories = {p["directory"] for p in context.packages}
         for file in context.files:
-            if not under(file, plan.directory):
+            if owner(file, directories) != plan.directory:
                 continue
             relative = Path(file).relative_to(plan.directory).as_posix()
             suffix = Path(file).suffix
@@ -181,11 +185,15 @@ class JavaScriptAdapter:
         plan.metadata.setdefault("discovery_commands", []).append(command)
         if process.timed_out:
             plan.metadata["timed_out"] = True
+            plan.unavailable_reason = "budget_exhausted"
             raise ValueError("Total budget exhausted during runner discovery.")
         if process.error or process.code:
+            if process.error:
+                plan.unavailable_reason = "infrastructure_error"
             raise ValueError(process.error or process.output[-1500:] or "Native discovery failed.")
         values = json_value(process.output, list)
         files = []
+        directories = {p["directory"] for p in context.packages}
         for item in values:
             if not isinstance(item, (str, dict)):
                 raise ValueError("Unrecognized native test file entry type.")
@@ -198,28 +206,42 @@ class JavaScriptAdapter:
             path = path.resolve()
             if not path.is_relative_to(context.repo) or not path.is_file():
                 raise ValueError("Native discovery returned a missing or external test path.")
-            files.append(path.relative_to(context.repo).as_posix())
+            relative = path.relative_to(context.repo).as_posix()
+            if owner(relative, directories) == plan.directory:
+                files.append(relative)
         return sorted(set(files))
 
     def prepare(self, context: Context, plan: Plan) -> None:
         plan.discovered = self.discover(context, plan)
-        if self.binary and context.execute and plan.available:
+        if not hasattr(context, "_js_graph"):
+            context._js_graph = graph(context.repo, context.files, context.budget)
+        edges, problems = context._js_graph
+        changed = context.changed
+        directories = {p["directory"] for p in context.packages}
+        local_changes = {p for p in changed if owner(p, directories) == plan.directory
+                         and (Path(p).suffix in JS_SUFFIXES | {".json", ".yaml", ".toml"}
+                              or Path(p).name == "yarn.lock")}
+        needs_discovery = (context.mode == "full" or bool(local_changes)
+                           or any(changed & closure(test, edges) for test in plan.discovered))
+        if self.binary and not needs_discovery:
+            needs_discovery = any(
+                mapped_changes(context, rule) and any(
+                    Path(p).suffix in JS_SUFFIXES and matches(p, rule["tests"])
+                    and owner(p, directories) == plan.directory for p in context.files)
+                for rule in context.settings.get("mappings", [])
+            )
+        if self.binary and context.execute and plan.available and needs_discovery:
             try:
                 plan.discovered = self.native_discovery(context, plan)
             except (ValueError, OSError, TypeError) as exc:
                 plan.available = False
                 plan.unknown = True
+                plan.unavailable_reason = plan.unavailable_reason or "collection_error"
                 plan.limitations.append(f"Cannot verify native discovery: {exc}")
-        elif self.binary:
+        elif self.binary and not context.execute:
             plan.unknown = True
             plan.limitations.append("Static discovery is provisional; check queries the runner's configuration.")
-        if not hasattr(context, "_js_graph"):
-            context._js_graph = graph(context.repo, context.files, context.budget)
-        edges, problems = context._js_graph
-        changed = context.changed
-        local_changes = {p for p in changed if under(p, plan.directory)
-                         and (Path(p).suffix in JS_SUFFIXES | {".json", ".yaml", ".toml"}
-                              or Path(p).name == "yarn.lock")}
+        apply_mappings(context, plan)
         configs = {p for p in local_changes if Path(p).name in {
             "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "tsconfig.json",
             ".regression-guard.toml"} or re.match(r"(?:vite|vitest|jest)\.config\.", Path(p).name)}
@@ -227,11 +249,12 @@ class JavaScriptAdapter:
             reachable = closure(test, edges, direct=context.mode == "fast")
             related = changed & reachable
             if context.mode == "full" or related:
-                plan.selected.append(test)
+                if test not in plan.reasons:
+                    plan.selected.append(test)
                 plan.reasons[test] = (["explicit full mode"] if context.mode == "full" else
                                       [f"static import or changed test: {p}" for p in sorted(related)])
                 plan.covered.update(related)
-            for item in closure(test, edges):
+            for item in closure(test, edges) if test in plan.reasons else ():
                 if item in problems:
                     plan.unknown = True
                     plan.limitations.extend(problems[item])
@@ -246,6 +269,7 @@ class JavaScriptAdapter:
                                           for p in plan.discovered):
             plan.unknown = True
             plan.available = False
+            plan.unavailable_reason = "environment_unavailable"
             plan.limitations.append("Node adapter does not implicitly install TypeScript/JSX loaders.")
 
     def run(self, context: Context, plan: Plan):

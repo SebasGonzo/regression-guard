@@ -33,6 +33,10 @@ def build(changes: list[Change], impact: Impact, selection: Selection, run: Run 
 
 def render(report: dict, *, compact: bool = False) -> str:
     lines = [f"Regression Guard: {report['status']} (risk: {report['risk']})"]
+    if report.get("reasons"):
+        lines.append("outcomes: " + ", ".join(report["reasons"]))
+    if report.get("risk_assessed") is False:
+        lines.append("change risk was not assessed")
     keys = ("changes", "dependents", "discovered", "selected", "executed", "passed", "failed", "skipped", "pending", "limitations", "errors")
     for key in keys:
         val = report.get(key, [])
@@ -40,8 +44,16 @@ def render(report: dict, *, compact: bool = False) -> str:
         for item in (val[:4] if compact else val):
             lines.append(f"  - {item if isinstance(item, str) else item['source'] + ':' + item['status'] + ':' + item['path']}")
     if "runners" in report:
-        for runner in report["runners"]:
+        runners = report["runners"]
+        if compact:
+            runners = sorted(runners, key=lambda r: not r["selected"])[:4]
+        for runner in runners:
             lines.append(f"runner: {runner['id']} discovered={len(runner['discovered'])} selected={len(runner['selected'])} executed={len(runner['executed'])}")
+            if runner["reasons"]:
+                lines.append("  outcomes: " + ", ".join(runner["reasons"]))
+            selections = list(runner["selection_reasons"].items())
+            for test, reasons in (selections[:4] if compact else selections):
+                lines.append(f"  {test}: " + "; ".join(reasons[:3] if compact else reasons))
         lines.append(f"case_counts: {report['case_counts']}")
     lines.append(f"duration_seconds: {report['duration_seconds']}")
     return "\n".join(lines)
