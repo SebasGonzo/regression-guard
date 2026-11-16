@@ -4,15 +4,53 @@ import os
 import shutil
 import subprocess
 import sys
+import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from helpers import Repository
+from regression_guard import __version__
+from regression_guard.cli import main
 from regression_guard.engine import inspect
+from regression_guard.execution import observe
 from regression_guard.process import ProcessResult
+from regression_guard.project import matches, policy_config
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_release_metadata_matches_the_code():
+    with (ROOT / "pyproject.toml").open("rb") as manifest:
+        project = tomllib.load(manifest)["project"]
+    assert project["version"] == __version__
+    assert project["scripts"]["regression-guard"] == "regression_guard.cli:main"
+    assert callable(main)
+
+
+def test_project_mappings_target_discoverable_tests():
+    rules = policy_config(ROOT)["mappings"]
+    discovered = inspect(ROOT, execute=False, timeout=10)["discovered"]
+    assert rules and discovered
+    for rule in rules:
+        for target in rule["tests"]:
+            assert any(matches(path, [target]) for path in discovered), target
+
+
+def test_pytest_summary_with_clock_duration_keeps_case_counts():
+    passed, outcome = observe(
+        ProcessResult(code=0, output="32 passed, 65 subtests passed in 66.66s (0:01:06)\r\n"),
+        "pytest",
+    )
+    assert outcome == "passed"
+    assert (passed.total, passed.passed) == (32, 32)
+
+    failed, outcome = observe(
+        ProcessResult(code=1, output="=== 1 failed, 31 passed in 66.66s (0:01:06) ===\n"),
+        "pytest",
+    )
+    assert outcome == "test_failure"
+    assert (failed.total, failed.failed) == (32, 1)
 
 
 class RepairTests(unittest.TestCase):
@@ -135,6 +173,44 @@ class RepairTests(unittest.TestCase):
         manifest = self.check()
         self.assertEqual(manifest["executed"], ["tests/test_data.py"])
         self.assertIn("mapping 1: data/a.json", str(manifest["runners"][0]["selection_reasons"]))
+
+    def test_overlapping_configuration_mappings_select_only_the_associated_file(self):
+        test = "specs/test_render.py"
+        self.repo.write(".regression-guard.toml", 'fallback="unknown"\nmax_tests=4\npython_runner="pytest"\n')
+        self.repo.write(".regression-guard-mappings.toml",
+                        '[[mappings]]\nchanges=["pyproject.toml"]\ntests=["specs/test_render.py"]\n'
+                        '[[mappings]]\nchanges=["config/ACTIVE"]\ntests=["specs/test_render.py"]\n')
+        self.repo.write("pyproject.toml", '[tool.pytest.ini_options]\ntestpaths=["specs"]\n')
+        self.repo.write("config/ACTIVE", "preview\n")
+        self.repo.write(test, "from pathlib import Path\n\n"
+                        "def test_render():\n    assert Path('config/ACTIVE').read_text().strip() == 'live'\n")
+        self.repo.write("specs/test_unrelated.py", "def test_unrelated(): assert False\n")
+        self.repo.commit()
+        self.repo.write("pyproject.toml",
+                        '[tool.pytest.ini_options]\ntestpaths=["specs"]\npython_files=["test_*.py"]\n')
+        self.repo.write("config/ACTIVE", "live\n")
+        report = self.check()
+        self.assertEqual(report["status"], "PASS", report)
+        self.assertEqual(report["risk"], "high")
+        self.assertEqual(report["policy"], {"fallback": "unknown", "max_tests": 4, "python_runner": "pytest"})
+        self.assertEqual(report["selected"], [test])
+        self.assertEqual(report["executed"], [test])
+        self.assertEqual(report["case_counts"]["passed"], 1)
+        self.assertEqual(report["runners"][0]["selection_reasons"][test],
+                         ["mapping 1: pyproject.toml", "mapping 2: config/ACTIVE"])
+
+    def test_separate_mappings_reject_conflicts_and_unexpected_keys(self):
+        separate = ".regression-guard-mappings.toml"
+        self.repo.write(separate, "mappings=[]\nfallback='suite'\n")
+        with self.assertRaisesRegex(ValueError, "must define only mappings"):
+            policy_config(self.repo.path)
+        self.repo.write(separate, "mappings='wrong type'\n")
+        with self.assertRaisesRegex(ValueError, "mappings must be an array of tables"):
+            policy_config(self.repo.path)
+        self.repo.write(separate, "mappings=[]\n")
+        self.repo.write(".regression-guard.toml", "mappings=[]\n")
+        with self.assertRaisesRegex(ValueError, "Define mappings in either"):
+            policy_config(self.repo.path)
 
     @unittest.skipUnless(shutil.which("node"), "Node is required")
     def test_nested_node_package_and_overlapping_scripts_execute_one_case(self):

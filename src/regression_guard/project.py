@@ -13,9 +13,11 @@ SOURCE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", 
                    ".go", ".rs", ".java", ".cs", ".rb", ".php", ".vue", ".svelte",
                    ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".lock",
                    ".css", ".scss", ".sass", ".less", ".html", ".mdx"}
+MAPPINGS_FILE = ".regression-guard-mappings.toml"
 CONFIG_NAMES = {"pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "conftest.py",
                 "package.json", "tsconfig.json", "package-lock.json", "pnpm-lock.yaml",
-                "yarn.lock", ".regression-guard.toml", "pytest.toml", ".pytest.toml", ".pytest.ini"}
+                "yarn.lock", ".regression-guard.toml", "pytest.toml", ".pytest.toml", ".pytest.ini",
+                MAPPINGS_FILE}
 
 
 def matches(path: str, patterns: list[str]) -> bool:
@@ -76,6 +78,14 @@ def policy_config(repo: Path) -> dict:
     allowed = {"fallback", "max_tests", "python_runner", "mappings", "environments"}
     if set(data) - allowed:
         raise ValueError("Unsupported Regression Guard policy: " + ", ".join(sorted(set(data) - allowed)))
+    mappings_path = repo / MAPPINGS_FILE
+    if mappings_path.is_file():
+        separate = tomllib.loads(mappings_path.read_text(encoding="utf-8"))
+        if set(separate) != {"mappings"}:
+            raise ValueError(f"{MAPPINGS_FILE} must define only mappings.")
+        if "mappings" in data:
+            raise ValueError(f"Define mappings in either the main policy or {MAPPINGS_FILE}.")
+        data["mappings"] = separate["mappings"]
     mappings = data.get("mappings", [])
     if not isinstance(mappings, list):
         raise ValueError("mappings must be an array of tables.")

@@ -55,7 +55,11 @@ def counts(output: str, runner: str) -> Counts:
         failed = unit("failures") + unit("errors") + unit("unexpected successes")
         skipped = unit("skipped") + unit("expected failures")
         return Counts(total, max(0, total - failed - skipped), failed, skipped)
-    summaries = re.findall(r"(?m)^=*\s*(\d+[^\r\n]* in [\d.]+s)\s*=*\s*$", output)
+    summaries = re.findall(
+        r"(?m)^=*[ \t]*(\d+[^\r\n]* in \d+(?:\.\d+)?s)"
+        r"(?: \((?:\d+ days?, )?\d+:\d{2}:\d{2}\))?[ \t]*=*[ \t]*\r?$",
+        output,
+    )
     summary = summaries[-1] if summaries else ""
     def pytest_number(label):
         found = re.search(r"\b(\d+) " + label + r"\b", summary)

@@ -68,6 +68,8 @@ CLI flags override repository policy. Unknown policy keys and invalid values are
 
 Mappings match repository-relative paths and discovered tests. Glob patterns use case-sensitive fnmatch syntax, where `*` can span directory separators. Each selected test lists its matched rule and changed path. Hooks use the same mappings to recognize paths without a file extension. Multiple rules can match the same test.
 
+For projects used with both 1.1 and 1.2, put the `[[mappings]]` tables in a root `.regression-guard-mappings.toml`. This file accepts only mappings. Keep the shared settings `fallback`, `max_tests`, and `python_runner` in the main policy. Regression Guard 1.1 reads the main policy and ignores the separate file. Regression Guard 1.2 uses both files and rejects mappings declared in both places.
+
 Environment keys are exact repository-relative project directories. For Python, an explicit repository-relative venv takes precedence, followed by the project's existing .venv or venv and then the Python running Regression Guard. An unavailable configured environment is reported without substituting another interpreter. Profiles of kind wsl or docker can be declared and are reported as environment_unavailable in 1.2.0. This release does not launch those transports.
 
 ## Script allowlist
