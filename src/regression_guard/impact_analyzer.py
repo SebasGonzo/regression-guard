@@ -26,17 +26,9 @@ def _module(path: str) -> str:
     return ".".join(bits)
 
 
-def analyze(repo: Path, changes: list[Change], *, files: list[str] | None = None, budget=None) -> Impact:
-    changed = sorted({c.path for c in changes})
-    python_changes = {p for p in changed if p.endswith(".py")}
-    modules = {_module(p): p for p in python_changes}
-    dependents: set[str] = set()
-    limitations: list[str] = []
-    unknown = False
-    critical = {"pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "conftest.py", "package.json"}
-    if any(Path(p).name in critical for p in changed):
-        unknown = True
-        limitations.append("Global test/build configuration changed; selective coverage may be insufficient.")
+def import_index(repo: Path, *, files: list[str] | None = None, budget=None) -> tuple[dict[str, set[str]], list[str]]:
+    imports = {}
+    limitations = []
     sources = (repo / p for p in files if p.endswith(".py")) if files is not None else repo.rglob("*.py")
     for file in sources:
         if budget:
@@ -47,7 +39,6 @@ def analyze(repo: Path, changes: list[Change], *, files: list[str] | None = None
         try:
             tree = ast.parse(file.read_text(encoding="utf-8"))
         except (SyntaxError, UnicodeError, OSError):
-            unknown = True
             limitations.append(f"Cannot parse imports: {rel}")
             continue
         imported: set[str] = set()
@@ -62,6 +53,28 @@ def analyze(repo: Path, changes: list[Change], *, files: list[str] | None = None
                     prefix = node.module or ""
                 imported.add(prefix)
                 imported.update(f"{prefix}.{a.name}".strip(".") for a in node.names)
+        imports[rel] = imported
+    return imports, limitations
+
+
+def analyze(repo: Path, changes: list[Change], *, files: list[str] | None = None, budget=None,
+            index=None) -> Impact:
+    changed = sorted({c.path for c in changes})
+    python_changes = {p for p in changed if p.endswith(".py")}
+    modules = {_module(p) for p in python_changes}
+    modules.update(f"src.{_module(p)}" for p in python_changes if p.startswith("src/") and _module(p))
+    imports, errors = index if index is not None else import_index(repo, files=files, budget=budget)
+    limitations = errors.copy()
+    unknown = bool(errors)
+    critical = {"pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "conftest.py", "package.json",
+                "pytest.toml", ".pytest.toml", ".pytest.ini"}
+    if any(Path(p).name in critical for p in changed):
+        unknown = True
+        limitations.append("Global test/build configuration changed; selective coverage may be insufficient.")
+    dependents = set()
+    for rel, imported in imports.items():
+        if budget:
+            budget.check()
         if rel not in python_changes and any(
             imp == mod or imp.startswith(mod + ".") or mod.startswith(imp + ".")
             for imp in imported for mod in modules if imp

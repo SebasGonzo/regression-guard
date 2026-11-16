@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import tomllib
 import json
+from fnmatch import fnmatchcase
 from pathlib import Path, PureWindowsPath
 
 EXCLUDED = {".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build",
@@ -14,13 +15,26 @@ SOURCE_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", 
                    ".css", ".scss", ".sass", ".less", ".html", ".mdx"}
 CONFIG_NAMES = {"pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "conftest.py",
                 "package.json", "tsconfig.json", "package-lock.json", "pnpm-lock.yaml",
-                "yarn.lock", ".regression-guard.toml"}
+                "yarn.lock", ".regression-guard.toml", "pytest.toml", ".pytest.toml", ".pytest.ini"}
 
 
-def relevant(path: str) -> bool:
+def matches(path: str, patterns: list[str]) -> bool:
+    return any(fnmatchcase(path, pattern) for pattern in patterns)
+
+
+def relevant(path: str, mappings=()) -> bool:
     p = Path(path)
+    if any(matches(path, rule["changes"]) for rule in mappings):
+        return True
+    if any(part in {".venv", "venv", ".tox"} for part in p.parts[:-1]):
+        return False
     return (p.suffix.lower() in SOURCE_SUFFIXES or p.name.lower() in CONFIG_NAMES
             or (p.name.lower().startswith("requirements") and p.suffix.lower() == ".txt"))
+
+
+def owner(path: str, directories) -> str:
+    """Find the nearest enclosing project, including for a deleted path."""
+    return next((p.as_posix() for p in Path(path).parents if p.as_posix() in directories), ".")
 
 
 def inventory(repo: Path, budget=None) -> list[str]:
@@ -40,7 +54,8 @@ def inventory(repo: Path, budget=None) -> list[str]:
 def local_path(root: Path, value: str, *, pattern: bool = False) -> str:
     value = value.replace("\\", "/")
     if (not value or Path(value).is_absolute() or PureWindowsPath(value).is_absolute()
-            or PureWindowsPath(value).drive or ".." in Path(value).parts or value.startswith("-")):
+            or PureWindowsPath(value).drive or ".." in Path(value).parts or value.startswith("-")
+            or any(c in value for c in "\x00\r\n")):
         raise ValueError(f"Only relative repository paths are allowed: {value!r}")
     if not pattern and not (root / value).resolve().is_relative_to(root.resolve()):
         raise ValueError(f"Path escapes the repository: {value!r}")
@@ -58,9 +73,37 @@ def policy_config(repo: Path) -> dict:
         data = {}
     if not isinstance(data, dict):
         raise ValueError("Regression Guard policy must be a TOML table.")
-    allowed = {"fallback", "max_tests", "python_runner"}
+    allowed = {"fallback", "max_tests", "python_runner", "mappings", "environments"}
     if set(data) - allowed:
         raise ValueError("Unsupported Regression Guard policy: " + ", ".join(sorted(set(data) - allowed)))
+    mappings = data.get("mappings", [])
+    if not isinstance(mappings, list):
+        raise ValueError("mappings must be an array of tables.")
+    for rule in mappings:
+        if not isinstance(rule, dict) or set(rule) != {"changes", "tests"}:
+            raise ValueError("Each mapping requires changes and tests.")
+        for key in ("changes", "tests"):
+            values = rule[key]
+            if not isinstance(values, list) or not values or not all(isinstance(p, str) for p in values):
+                raise ValueError(f"Mapping {key} must be a nonempty list of path patterns.")
+            rule[key] = [local_path(repo, p, pattern=True).removeprefix("./") for p in values]
+    environments = data.get("environments", {})
+    if not isinstance(environments, dict):
+        raise ValueError("environments must be a table keyed by project directory.")
+    for directory, profile in environments.items():
+        if local_path(repo, directory) != Path(directory).as_posix().rstrip("/"):
+            raise ValueError("Environment keys must be repository-relative project directories.")
+        if not isinstance(profile, dict) or profile.get("kind") not in ("host", "wsl", "docker"):
+            raise ValueError("Environment kind must be host, wsl or docker.")
+        allowed_keys = {"kind", "venv"} if profile["kind"] == "host" else {"kind", "profile"}
+        if set(profile) - allowed_keys:
+            raise ValueError(f"Unsupported environment fields for {directory}.")
+        if "venv" in profile:
+            if not isinstance(profile["venv"], str):
+                raise ValueError("venv must be a relative directory.")
+            profile["venv"] = local_path(repo, profile["venv"])
+        if "profile" in profile and (not isinstance(profile["profile"], str) or not profile["profile"].strip()):
+            raise ValueError("profile must be a nonempty name.")
     return data
 
 

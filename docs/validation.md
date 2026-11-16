@@ -1,4 +1,20 @@
-# Validation — 2026-11-10
+# Validation
+
+## Regression Guard 1.2.0 — 2026-11-16
+
+The Windows release-candidate checks used Python 3.11.9 and Node 22.22.0. The focused run passed 22 tests and 45 subtests. The two opt-in native framework tests were skipped because no existing Vitest or Jest installation was found for these fixtures. Their adapter contracts ran against synthetic runner outputs. pytest, unittest and node:test ran natively.
+
+~~~powershell
+$env:PYTHONDONTWRITEBYTECODE = '1'
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
+python -B -m pytest -q -p no:cacheprovider tests/test_repair.py tests/test_adapters.py tests/test_integrations.py tests/test_real_javascript.py -k 'RepairTests or RealJavaScriptRunners or detection_discovery_selection_and_execution or failure_for_each_runner or missing_node_and_framework or missing_local_vitest or incompatible_framework_output or all_payload_adapters or script or timeout_for_each_runner or global_file_budget'
+~~~
+
+The repair fixtures cover nested Python and JavaScript packages, virtual environments, duplicate test selection, extensionless paths, collection and launch errors, and a genuine failed assertion. Simulated Codex and Claude Code hooks use the same mapped selection as the CLI. WSL and Docker declarations report unavailable and leave execution to a future integration.
+
+To reproduce the candidate from a checked-out 1.2.0 commit, clone the development checkout into a separate directory with `git clone --no-local --single-branch --branch codex/regression-guard-1.2.0 <checkout> <candidate>`, then run the command above in the clone with existing test dependencies. The CLI entry point is `scripts/run.py`, the package version is exposed in `src/regression_guard/__init__.py`, and the simulated hooks call the clone's `integrations/hooks/auto_check.py`.
+
+## Regression Guard 1.1.0 — 2026-11-10
 
 Local version 1.1.0, branch codex/multi-runner-regression. Base commit: 221e384142d903674ec05a8382ae6c5111a23cd3. Changes remain uncommitted; no release or remote update was performed.
 
